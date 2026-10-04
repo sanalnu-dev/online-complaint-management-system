@@ -1,0 +1,18 @@
+{
+  "name": "ocms",
+  "version": "1.0.0",
+  "description": "Online Complaint Management System (OCMS) - Complete Full-Stack College Project",
+  "private": true,
+  "scripts": {
+    "server": "npm --prefix server start",
+    "server:dev": "npm --prefix server run dev",
+    "client": "npm --prefix client run dev",
+    "client:build": "npm --prefix client run build",
+    "test:server": "npm --prefix server test",
+    "test:client": "npm --prefix client test",
+    "test": "npm run test:server && npm run test:client"
+  },
+  "keywords": ["ocms", "complaint-system", "fullstack", "react", "express", "mysql"],
+  "author": "OCMS Development Team",
+  "license": "MIT"
+}
