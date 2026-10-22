@@ -169,6 +169,8 @@ export default function MyComplaintsPage() {
             >
               <option value="">All Statuses</option>
               <option value="Submitted">Submitted</option>
+              <option value="Pending">Pending</option>
+              <option value="Assigned">Assigned</option>
               <option value="Under Review">Under Review</option>
               <option value="In Progress">In Progress</option>
               <option value="Resolved">Resolved</option>
@@ -272,8 +274,13 @@ export default function MyComplaintsPage() {
                         <div className="font-semibold text-slate-900 line-clamp-1">
                           {item.title}
                         </div>
-                        <div className="text-xs text-slate-500 mt-0.5">
-                          {item.category_name}
+                        <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                          <span className="text-xs text-slate-500">{item.category_name}</span>
+                          {item.assigned_faculty_name && (
+                            <span className="inline-flex items-center text-[10px] font-semibold text-purple-700 bg-purple-50 px-1.5 py-0.5 rounded border border-purple-200">
+                              Faculty: {item.assigned_faculty_name}
+                            </span>
+                          )}
                         </div>
                       </td>
                       <td className="px-6 py-4 text-xs text-slate-600 whitespace-nowrap">

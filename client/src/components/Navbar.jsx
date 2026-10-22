@@ -14,13 +14,19 @@ import {
 } from 'lucide-react';
 
 export default function Navbar() {
-  const { user, isAuthenticated, isAdmin, logout } = useAuth();
+  const { user, isAuthenticated, isAdmin, isFaculty, logout } = useAuth();
   const navigate = useNavigate();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const handleLogout = () => {
     logout();
     navigate('/login');
+  };
+
+  const getDashboardPath = () => {
+    if (isAdmin) return '/admin/dashboard';
+    if (isFaculty) return '/faculty/dashboard';
+    return '/dashboard';
   };
 
   return (
@@ -49,14 +55,14 @@ export default function Navbar() {
             {isAuthenticated ? (
               <>
                 <Link
-                  to={isAdmin ? '/admin/dashboard' : '/dashboard'}
+                  to={getDashboardPath()}
                   className="flex items-center gap-1.5 text-sm font-medium text-slate-600 hover:text-primary-600 px-3 py-2 rounded-lg hover:bg-slate-50 transition-colors"
                 >
                   <LayoutDashboard className="w-4 h-4" />
-                  Dashboard
+                  {isFaculty ? 'Workspace' : 'Dashboard'}
                 </Link>
 
-                {!isAdmin && (
+                {!isAdmin && !isFaculty && (
                   <>
                     <Link
                       to="/complaints/new"
@@ -75,14 +81,32 @@ export default function Navbar() {
                   </>
                 )}
 
-                {isAdmin && (
+                {isFaculty && (
                   <Link
-                    to="/admin/complaints"
+                    to="/faculty/complaints"
                     className="flex items-center gap-1.5 text-sm font-medium text-slate-600 hover:text-primary-600 px-3 py-2 rounded-lg hover:bg-slate-50 transition-colors"
                   >
                     <ListOrdered className="w-4 h-4" />
-                    Manage Complaints
+                    Assigned Complaints
                   </Link>
+                )}
+
+                {isAdmin && (
+                  <>
+                    <Link
+                      to="/admin/complaints"
+                      className="flex items-center gap-1.5 text-sm font-medium text-slate-600 hover:text-primary-600 px-3 py-2 rounded-lg hover:bg-slate-50 transition-colors"
+                    >
+                      <ListOrdered className="w-4 h-4" />
+                      Manage Complaints
+                    </Link>
+                    <Link
+                      to="/admin/categories"
+                      className="flex items-center gap-1.5 text-sm font-medium text-slate-600 hover:text-primary-600 px-3 py-2 rounded-lg hover:bg-slate-50 transition-colors"
+                    >
+                      Categories
+                    </Link>
+                  </>
                 )}
 
                 <div className="h-6 w-px bg-slate-200 mx-1" />
@@ -92,7 +116,11 @@ export default function Navbar() {
                   to="/profile"
                   className="flex items-center gap-2 px-3 py-1.5 rounded-xl border border-slate-200 hover:border-slate-300 hover:bg-slate-50 transition-all text-sm"
                 >
-                  <div className="w-7 h-7 rounded-lg bg-navy-800 text-white flex items-center justify-center font-bold text-xs">
+                  <div
+                    className={`w-7 h-7 rounded-lg text-white flex items-center justify-center font-bold text-xs ${
+                      isAdmin ? 'bg-amber-600' : isFaculty ? 'bg-purple-600' : 'bg-navy-800'
+                    }`}
+                  >
                     {user?.fullName?.charAt(0) || 'U'}
                   </div>
                   <div className="text-left">
@@ -100,7 +128,11 @@ export default function Navbar() {
                       {user?.fullName}
                     </div>
                     <div className="text-[10px] text-slate-500 font-medium">
-                      {isAdmin ? 'ADMINISTRATOR' : (user?.studentEmployeeId || 'STUDENT')}
+                      {isAdmin
+                        ? 'ADMINISTRATOR'
+                        : isFaculty
+                        ? 'FACULTY'
+                        : user?.studentEmployeeId || 'STUDENT'}
                     </div>
                   </div>
                 </Link>
@@ -168,14 +200,14 @@ export default function Navbar() {
               </div>
 
               <Link
-                to={isAdmin ? '/admin/dashboard' : '/dashboard'}
+                to={getDashboardPath()}
                 onClick={() => setMobileMenuOpen(false)}
                 className="block px-3 py-2 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-100"
               >
-                Dashboard
+                {isFaculty ? 'Faculty Workspace' : 'Dashboard'}
               </Link>
 
-              {!isAdmin ? (
+              {!isAdmin && !isFaculty && (
                 <>
                   <Link
                     to="/complaints/new"
@@ -192,7 +224,19 @@ export default function Navbar() {
                     My Complaints
                   </Link>
                 </>
-              ) : (
+              )}
+
+              {isFaculty && (
+                <Link
+                  to="/faculty/complaints"
+                  onClick={() => setMobileMenuOpen(false)}
+                  className="block px-3 py-2 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-100"
+                >
+                  Assigned Complaints
+                </Link>
+              )}
+
+              {isAdmin && (
                 <>
                   <Link
                     to="/admin/complaints"
@@ -200,6 +244,13 @@ export default function Navbar() {
                     className="block px-3 py-2 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-100"
                   >
                     Manage Complaints
+                  </Link>
+                  <Link
+                    to="/admin/categories"
+                    onClick={() => setMobileMenuOpen(false)}
+                    className="block px-3 py-2 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-100"
+                  >
+                    Category Routing
                   </Link>
                   <Link
                     to="/admin/users"

@@ -23,13 +23,14 @@ import {
   MessageSquare,
   Send,
   ExternalLink,
-  Download
+  Download,
+  GraduationCap
 } from 'lucide-react';
 
 export default function ComplaintDetailsPage() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { user, isAdmin } = useAuth();
+  const { user, isAdmin, isFaculty } = useAuth();
   const { success, error: toastError } = useToast();
 
   const [complaint, setComplaint] = useState(null);
@@ -139,11 +140,11 @@ export default function ComplaintDetailsPage() {
       {/* Top Navigation Back Link */}
       <div className="flex items-center justify-between">
         <Link
-          to={isAdmin ? '/admin/complaints' : '/complaints'}
+          to={isAdmin ? '/admin/complaints' : isFaculty ? '/faculty/complaints' : '/complaints'}
           className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-500 hover:text-slate-800 transition-colors"
         >
           <ArrowLeft className="w-4 h-4" />
-          {isAdmin ? 'Back to Admin Queue' : 'Back to My Complaints'}
+          {isAdmin ? 'Back to Admin Queue' : isFaculty ? 'Back to Assigned Complaints' : 'Back to My Complaints'}
         </Link>
 
         {/* Reopen Action button if applicable */}
@@ -192,12 +193,12 @@ export default function ComplaintDetailsPage() {
         </div>
 
         {/* Metadata Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs">
           <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/60 flex items-center gap-3">
             <MapPin className="w-4 h-4 text-slate-400 flex-shrink-0" />
             <div>
               <p className="text-slate-400 uppercase tracking-wider font-semibold text-[10px]">Location</p>
-              <p className="font-semibold text-slate-800 mt-0.5">{complaint.location_department}</p>
+              <p className="font-semibold text-slate-800 mt-0.5 truncate">{complaint.location_department}</p>
             </div>
           </div>
 
@@ -210,10 +211,20 @@ export default function ComplaintDetailsPage() {
           </div>
 
           <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/60 flex items-center gap-3">
+            <GraduationCap className="w-4 h-4 text-purple-600 flex-shrink-0" />
+            <div>
+              <p className="text-slate-400 uppercase tracking-wider font-semibold text-[10px]">Responsible Faculty</p>
+              <p className="font-semibold text-slate-800 mt-0.5 truncate">
+                {complaint.assigned_faculty_name || 'Unassigned'}
+              </p>
+            </div>
+          </div>
+
+          <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/60 flex items-center gap-3">
             <ShieldCheck className="w-4 h-4 text-slate-400 flex-shrink-0" />
             <div>
               <p className="text-slate-400 uppercase tracking-wider font-semibold text-[10px]">Assigned Admin</p>
-              <p className="font-semibold text-slate-800 mt-0.5">
+              <p className="font-semibold text-slate-800 mt-0.5 truncate">
                 {complaint.assigned_admin_name || 'Pending assignment'}
               </p>
             </div>

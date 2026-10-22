@@ -1,26 +1,44 @@
 const VALID_PRIORITIES = ['Low', 'Medium', 'High', 'Urgent'];
 const VALID_STATUSES = [
   'Submitted',
+  'Pending',
+  'Assigned',
   'Under Review',
   'In Progress',
   'Resolved',
   'Rejected',
-  'Reopened'
+  'Reopened',
+  'Closed'
 ];
 
 // Valid state machine transitions
 const ALLOWED_ADMIN_TRANSITIONS = {
-  Submitted: ['Under Review', 'Rejected'],
+  Submitted: ['Pending', 'Assigned', 'Under Review', 'In Progress', 'Rejected'],
+  Pending: ['Assigned', 'Under Review', 'In Progress', 'Rejected'],
+  Assigned: ['Under Review', 'In Progress', 'Rejected'],
   'Under Review': ['In Progress', 'Rejected'],
   'In Progress': ['Resolved', 'Rejected'],
-  Resolved: [], // Admins don't reopen; users reopen
+  Resolved: ['Closed'],
+  Rejected: ['Closed'],
+  Reopened: ['Under Review', 'In Progress', 'Assigned'],
+  Closed: []
+};
+
+const ALLOWED_FACULTY_TRANSITIONS = {
+  Submitted: ['Under Review', 'In Progress', 'Rejected'],
+  Pending: ['Under Review', 'In Progress', 'Rejected'],
+  Assigned: ['Under Review', 'In Progress', 'Rejected'],
+  'Under Review': ['In Progress', 'Resolved', 'Rejected'],
+  'In Progress': ['Resolved', 'Rejected', 'Under Review'],
+  Reopened: ['Under Review', 'In Progress'],
+  Resolved: [],
   Rejected: [],
-  Reopened: ['Under Review', 'In Progress']
+  Closed: []
 };
 
 function validateCreateComplaint(data) {
   const errors = [];
-  const { title, description, category_id, location_department, priority } = data;
+  const { title, description, category_id, location_department, priority, assigned_faculty_id } = data;
 
   if (!title || typeof title !== 'string' || title.trim().length < 5) {
     errors.push('Title must be at least 5 characters long.');
@@ -45,6 +63,21 @@ function validateCreateComplaint(data) {
     errors.push('Location/department cannot exceed 150 characters.');
   }
 
+  let facultyId = null;
+  if (
+    assigned_faculty_id !== undefined &&
+    assigned_faculty_id !== null &&
+    assigned_faculty_id !== '' &&
+    assigned_faculty_id !== 'null'
+  ) {
+    const parsed = parseInt(assigned_faculty_id, 10);
+    if (isNaN(parsed) || parsed <= 0) {
+      errors.push('Invalid faculty member selected.');
+    } else {
+      facultyId = parsed;
+    }
+  }
+
   const sanitizedPriority = priority && VALID_PRIORITIES.includes(priority) ? priority : 'Medium';
 
   return {
@@ -55,7 +88,8 @@ function validateCreateComplaint(data) {
       description: description ? description.trim() : '',
       category_id: catId,
       location_department: location_department ? location_department.trim() : '',
-      priority: sanitizedPriority
+      priority: sanitizedPriority,
+      assigned_faculty_id: facultyId
     }
   };
 }
@@ -74,6 +108,42 @@ function validateAdminStatusUpdate(currentStatus, targetStatus, remarks) {
   }
 
   const allowedNext = ALLOWED_ADMIN_TRANSITIONS[currentStatus] || [];
+  if (!allowedNext.includes(targetStatus)) {
+    errors.push(
+      `Cannot transition status from "${currentStatus}" to "${targetStatus}". Allowed next statuses: ${allowedNext.join(', ') || 'None'}.`
+    );
+  }
+
+  if ((targetStatus === 'Resolved' || targetStatus === 'Rejected') && (!remarks || remarks.trim().length < 5)) {
+    errors.push(`Remarks are mandatory when marking a complaint as ${targetStatus} (minimum 5 characters).`);
+  }
+
+  return {
+    isValid: errors.length === 0,
+    errors,
+    sanitizedRemarks: remarks ? remarks.trim() : null
+  };
+}
+
+function validateFacultyStatusUpdate(currentStatus, targetStatus, remarks) {
+  const errors = [];
+
+  if (!VALID_STATUSES.includes(targetStatus)) {
+    errors.push(`Invalid status value: ${targetStatus}`);
+    return { isValid: false, errors };
+  }
+
+  if (targetStatus === 'Reopened') {
+    errors.push('Complaints can only be reopened by the complaint owner.');
+    return { isValid: false, errors };
+  }
+
+  if (targetStatus === 'Closed') {
+    errors.push('Faculty cannot close complaints directly.');
+    return { isValid: false, errors };
+  }
+
+  const allowedNext = ALLOWED_FACULTY_TRANSITIONS[currentStatus] || [];
   if (!allowedNext.includes(targetStatus)) {
     errors.push(
       `Cannot transition status from "${currentStatus}" to "${targetStatus}". Allowed next statuses: ${allowedNext.join(', ') || 'None'}.`
@@ -112,7 +182,10 @@ function validateUserReopen(currentStatus, remarks) {
 module.exports = {
   VALID_PRIORITIES,
   VALID_STATUSES,
+  ALLOWED_ADMIN_TRANSITIONS,
+  ALLOWED_FACULTY_TRANSITIONS,
   validateCreateComplaint,
   validateAdminStatusUpdate,
+  validateFacultyStatusUpdate,
   validateUserReopen
 };

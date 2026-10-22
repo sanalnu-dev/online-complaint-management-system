@@ -16,7 +16,9 @@ import {
   ArrowRight,
   FileSpreadsheet,
   AlertTriangle,
-  Layers
+  Layers,
+  FolderTree,
+  GraduationCap
 } from 'lucide-react';
 import {
   BarChart,

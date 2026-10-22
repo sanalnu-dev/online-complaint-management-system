@@ -92,6 +92,8 @@ export function AuthProvider({ children }) {
     loading,
     isAuthenticated: Boolean(token && user),
     isAdmin: user?.role === 'ADMIN',
+    isFaculty: user?.role === 'FACULTY',
+    isStudent: user?.role === 'USER' || user?.role === 'STUDENT',
     login,
     register,
     logout,

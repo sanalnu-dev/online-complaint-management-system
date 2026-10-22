@@ -19,6 +19,7 @@ export default function SubmitComplaintPage() {
   const { success, error: toastError } = useToast();
 
   const [categories, setCategories] = useState([]);
+  const [facultyList, setFacultyList] = useState([]);
   const [loadingCategories, setLoadingCategories] = useState(true);
 
   const [formData, setFormData] = useState({
@@ -26,7 +27,8 @@ export default function SubmitComplaintPage() {
     category_id: '',
     location_department: '',
     priority: 'Medium',
-    description: ''
+    description: '',
+    assigned_faculty_id: ''
   });
 
   const [attachment, setAttachment] = useState(null);
@@ -38,28 +40,54 @@ export default function SubmitComplaintPage() {
   const [successResult, setSuccessResult] = useState(null);
 
   useEffect(() => {
-    async function loadCategories() {
+    async function loadData() {
       try {
-        const res = await complaintService.getCategories();
-        if (res.success && res.categories) {
-          setCategories(res.categories);
-          if (res.categories.length > 0) {
-            setFormData((prev) => ({ ...prev, category_id: res.categories[0].category_id }));
+        const [catRes, facRes] = await Promise.all([
+          complaintService.getCategories(),
+          complaintService.getFacultyList()
+        ]);
+
+        if (catRes.success && catRes.categories) {
+          setCategories(catRes.categories);
+          if (catRes.categories.length > 0) {
+            const firstCat = catRes.categories[0];
+            setFormData((prev) => ({
+              ...prev,
+              category_id: firstCat.category_id,
+              location_department: prev.location_department || firstCat.department || '',
+              assigned_faculty_id: firstCat.default_faculty_id ? String(firstCat.default_faculty_id) : ''
+            }));
           }
         }
+
+        if (facRes.success && facRes.faculty) {
+          setFacultyList(facRes.faculty);
+        }
       } catch (err) {
-        toastError('Failed to load complaint categories');
+        toastError('Failed to load categories and faculty list');
       } finally {
         setLoadingCategories(false);
       }
     }
-    loadCategories();
+    loadData();
   }, [toastError]);
 
   const handleChange = (e) => {
     setFormData((prev) => ({
       ...prev,
       [e.target.name]: e.target.value
+    }));
+    setFormError('');
+  };
+
+  const handleCategoryChange = (e) => {
+    const selectedCatId = parseInt(e.target.value, 10);
+    const cat = categories.find((c) => c.category_id === selectedCatId);
+    setFormData((prev) => ({
+      ...prev,
+      category_id: selectedCatId,
+      location_department: cat?.department || prev.location_department,
+      assigned_faculty_id: cat?.default_faculty_id ? String(cat.default_faculty_id) : ''
     }));
     setFormError('');
   };
@@ -128,6 +156,10 @@ export default function SubmitComplaintPage() {
       payload.append('priority', formData.priority);
       payload.append('description', formData.description.trim());
 
+      if (formData.assigned_faculty_id) {
+        payload.append('assigned_faculty_id', formData.assigned_faculty_id);
+      }
+
       if (attachment) {
         payload.append('attachment', attachment);
       }
@@ -147,6 +179,10 @@ export default function SubmitComplaintPage() {
       setSubmitting(false);
     }
   };
+
+  const selectedCategoryObj = categories.find(
+    (c) => c.category_id === parseInt(formData.category_id, 10)
+  );
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
@@ -200,7 +236,7 @@ export default function SubmitComplaintPage() {
               name="category_id"
               required
               value={formData.category_id}
-              onChange={handleChange}
+              onChange={handleCategoryChange}
               disabled={loadingCategories}
               className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all cursor-pointer"
             >
@@ -227,6 +263,35 @@ export default function SubmitComplaintPage() {
               className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all"
             />
           </div>
+        </div>
+
+        {/* Optional Faculty Routing Selector */}
+        <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/80">
+          <label className="block text-xs font-semibold text-slate-800 mb-1 uppercase tracking-wider">
+            Concerned Faculty Member <span className="text-slate-400 font-normal lowercase">(optional routing)</span>
+          </label>
+          <p className="text-xs text-slate-500 mb-2">
+            If this issue concerns a particular academic subject or teacher, choose them below for direct handling.
+          </p>
+          <select
+            name="assigned_faculty_id"
+            value={formData.assigned_faculty_id}
+            onChange={handleChange}
+            className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 cursor-pointer"
+          >
+            <option value="">-- No specific faculty / General administration --</option>
+            {facultyList.map((fac) => (
+              <option key={fac.user_id} value={fac.user_id}>
+                {fac.full_name} ({fac.email})
+              </option>
+            ))}
+          </select>
+          {selectedCategoryObj?.default_faculty_name && (
+            <p className="text-[11px] text-primary-700 font-medium mt-1.5 flex items-center gap-1">
+              <span>Default category advisor:</span>
+              <span className="font-semibold">{selectedCategoryObj.default_faculty_name}</span>
+            </p>
+          )}
         </div>
 
         {/* Priority Selector */}
@@ -400,6 +465,12 @@ export default function SubmitComplaintPage() {
               <code className="text-lg font-mono font-bold text-primary-700 block mt-1 select-all">
                 {successResult.referenceNumber}
               </code>
+              {successResult.assignedFacultyName && (
+                <div className="mt-2.5 pt-2 border-t border-slate-200/80 text-xs text-slate-600">
+                  <span className="text-slate-400">Assigned Faculty: </span>
+                  <span className="font-semibold text-slate-800">{successResult.assignedFacultyName}</span>
+                </div>
+              )}
             </div>
 
             <div className="flex flex-col gap-2 pt-2">

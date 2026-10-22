@@ -6,6 +6,11 @@ export const complaintService = {
     return response.data;
   },
 
+  async getFacultyList() {
+    const response = await api.get('/complaints/faculty');
+    return response.data;
+  },
+
   async submitComplaint(formData) {
     const response = await api.post('/complaints', formData, {
       headers: {

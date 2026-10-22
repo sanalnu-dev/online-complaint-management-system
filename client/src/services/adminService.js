@@ -24,10 +24,9 @@ export const adminService = {
     return response.data;
   },
 
-  async assignComplaint(id, adminId) {
-    const response = await api.patch(`/admin/complaints/${id}/assign`, {
-      admin_id: adminId
-    });
+  async assignComplaint(id, data) {
+    const payload = typeof data === 'object' && data !== null ? data : { admin_id: data };
+    const response = await api.patch(`/admin/complaints/${id}/assign`, payload);
     return response.data;
   },
 
@@ -38,6 +37,31 @@ export const adminService = {
 
   async getAdmins() {
     const response = await api.get('/admin/admins');
+    return response.data;
+  },
+
+  async getFaculty() {
+    const response = await api.get('/admin/faculty');
+    return response.data;
+  },
+
+  async getCategories() {
+    const response = await api.get('/admin/categories');
+    return response.data;
+  },
+
+  async createCategory(categoryData) {
+    const response = await api.post('/admin/categories', categoryData);
+    return response.data;
+  },
+
+  async updateCategory(id, categoryData) {
+    const response = await api.put(`/admin/categories/${id}`, categoryData);
+    return response.data;
+  },
+
+  async deleteCategory(id) {
+    const response = await api.delete(`/admin/categories/${id}`);
     return response.data;
   },
 

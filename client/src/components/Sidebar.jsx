@@ -9,11 +9,12 @@ import {
   User,
   LogOut,
   ShieldCheck,
-  FileSpreadsheet
+  FolderTree,
+  GraduationCap
 } from 'lucide-react';
 
 export default function Sidebar() {
-  const { user, isAdmin, logout } = useAuth();
+  const { user, isAdmin, isFaculty, logout } = useAuth();
   const navigate = useNavigate();
 
   const handleLogout = () => {
@@ -28,14 +29,21 @@ export default function Sidebar() {
     { label: 'My Profile', path: '/profile', icon: User }
   ];
 
+  const facultyNavItems = [
+    { label: 'Faculty Workspace', path: '/faculty/dashboard', icon: LayoutDashboard },
+    { label: 'Assigned Complaints', path: '/faculty/complaints', icon: ListOrdered },
+    { label: 'My Profile', path: '/profile', icon: User }
+  ];
+
   const adminNavItems = [
     { label: 'Admin Dashboard', path: '/admin/dashboard', icon: LayoutDashboard },
     { label: 'Complaint Queue', path: '/admin/complaints', icon: ListOrdered },
+    { label: 'Category Routing', path: '/admin/categories', icon: FolderTree },
     { label: 'User Directory', path: '/admin/users', icon: Users },
     { label: 'My Profile', path: '/profile', icon: User }
   ];
 
-  const navItems = isAdmin ? adminNavItems : userNavItems;
+  const navItems = isAdmin ? adminNavItems : isFaculty ? facultyNavItems : userNavItems;
 
   return (
     <aside className="w-64 bg-white border-r border-slate-200 hidden lg:flex flex-col justify-between min-h-[calc(100vh-4rem)] sticky top-16">
@@ -45,16 +53,18 @@ export default function Sidebar() {
           <div className="flex items-center gap-2">
             <span
               className={`w-2 h-2 rounded-full ${
-                isAdmin ? 'bg-amber-500' : 'bg-primary-500'
+                isAdmin ? 'bg-amber-500' : isFaculty ? 'bg-purple-600' : 'bg-primary-500'
               }`}
             />
             <span className="text-xs font-semibold uppercase tracking-wider text-slate-600">
-              {isAdmin ? 'Admin Console' : 'Student / Staff'}
+              {isAdmin ? 'Admin Console' : isFaculty ? 'Faculty Portal' : 'Student Portal'}
             </span>
           </div>
-          {isAdmin && (
+          {isAdmin ? (
             <ShieldCheck className="w-4 h-4 text-amber-600" />
-          )}
+          ) : isFaculty ? (
+            <GraduationCap className="w-4 h-4 text-purple-600" />
+          ) : null}
         </div>
 
         {/* Navigation list */}

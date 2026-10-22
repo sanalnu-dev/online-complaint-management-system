@@ -12,11 +12,37 @@ const {
 async function getCategories(req, res, next) {
   try {
     const categories = await query(
-      'SELECT category_id, category_name, description FROM categories ORDER BY category_name ASC'
+      `SELECT 
+        c.category_id, 
+        c.category_name, 
+        c.description, 
+        c.department, 
+        c.default_faculty_id,
+        u.full_name as default_faculty_name
+       FROM categories c
+       LEFT JOIN users u ON c.default_faculty_id = u.user_id
+       ORDER BY c.category_name ASC`
     );
     return res.status(200).json({
       success: true,
       categories
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getFacultyList(req, res, next) {
+  try {
+    const faculty = await query(
+      `SELECT user_id, full_name, email, student_employee_id 
+       FROM users 
+       WHERE role = 'FACULTY' AND is_active = 1 
+       ORDER BY full_name ASC`
+    );
+    return res.status(200).json({
+      success: true,
+      faculty
     });
   } catch (error) {
     next(error);
@@ -35,16 +61,54 @@ async function createComplaint(req, res, next) {
       });
     }
 
-    const { title, description, category_id, location_department, priority } = validation.sanitized;
+    const { title, description, category_id, location_department, priority, assigned_faculty_id } =
+      validation.sanitized;
 
-    // Verify category exists
-    const categoryExists = await query('SELECT category_id FROM categories WHERE category_id = ?', [category_id]);
-    if (categoryExists.length === 0) {
+    // Verify category exists and get department/default_faculty_id
+    const categoryRows = await query(
+      'SELECT category_id, category_name, department, default_faculty_id FROM categories WHERE category_id = ?',
+      [category_id]
+    );
+    if (categoryRows.length === 0) {
       return res.status(400).json({
         success: false,
         message: 'Invalid category selected'
       });
     }
+    const cat = categoryRows[0];
+
+    // Determine faculty assignment
+    let targetFacultyId = null;
+    let targetFacultyName = null;
+
+    if (assigned_faculty_id) {
+      // Validate requested faculty member
+      const facultyCheck = await query(
+        "SELECT user_id, full_name FROM users WHERE user_id = ? AND role = 'FACULTY' AND is_active = 1",
+        [assigned_faculty_id]
+      );
+      if (facultyCheck.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Selected faculty member does not exist or is inactive'
+        });
+      }
+      targetFacultyId = assigned_faculty_id;
+      targetFacultyName = facultyCheck[0].full_name;
+    } else if (cat.default_faculty_id) {
+      // Automatic routing to default category faculty
+      const defaultFacultyCheck = await query(
+        "SELECT user_id, full_name FROM users WHERE user_id = ? AND role = 'FACULTY' AND is_active = 1",
+        [cat.default_faculty_id]
+      );
+      if (defaultFacultyCheck.length > 0) {
+        targetFacultyId = cat.default_faculty_id;
+        targetFacultyName = defaultFacultyCheck[0].full_name;
+      }
+    }
+
+    // Determine initial status based on routing
+    const initialStatus = targetFacultyId ? 'Assigned' : 'Submitted';
 
     // Handle optional file attachment
     let attachmentPath = null;
@@ -59,8 +123,8 @@ async function createComplaint(req, res, next) {
     const insertSql = `
       INSERT INTO complaints (
         reference_number, user_id, category_id, title, description, 
-        location_department, priority, status, attachment_path, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'Submitted', ?, NOW(), NOW())
+        location_department, priority, status, attachment_path, assigned_faculty_id, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
     `;
 
     const [result] = await conn.execute(insertSql, [
@@ -71,32 +135,42 @@ async function createComplaint(req, res, next) {
       description,
       location_department,
       priority,
-      attachmentPath
+      initialStatus,
+      attachmentPath,
+      targetFacultyId
     ]);
 
     const complaintId = result.insertId;
 
     // Log initial status in complaint_status_history
+    const historyRemarks = targetFacultyId
+      ? `Complaint logged and assigned to faculty: ${targetFacultyName}`
+      : 'Complaint successfully logged by user';
+
     const historySql = `
       INSERT INTO complaint_status_history 
         (complaint_id, changed_by, old_status, new_status, remarks, created_at)
-      VALUES (?, ?, NULL, 'Submitted', 'Complaint successfully logged by user', NOW())
+      VALUES (?, ?, NULL, ?, ?, NOW())
     `;
-    await conn.execute(historySql, [complaintId, req.user.userId]);
+    await conn.execute(historySql, [complaintId, req.user.userId, initialStatus, historyRemarks]);
 
     await conn.commit();
 
     return res.status(201).json({
       success: true,
-      message: 'Complaint submitted successfully',
+      message: targetFacultyId
+        ? `Complaint submitted and routed to ${targetFacultyName}`
+        : 'Complaint submitted successfully',
       complaint: {
         complaintId,
         referenceNumber,
         title,
         priority,
-        status: 'Submitted',
+        status: initialStatus,
         locationDepartment: location_department,
-        attachmentPath
+        attachmentPath,
+        assignedFacultyId: targetFacultyId,
+        assignedFacultyName: targetFacultyName
       }
     });
   } catch (error) {
@@ -170,11 +244,15 @@ async function getMyComplaints(req, res, next) {
         c.created_at,
         c.updated_at,
         c.resolved_at,
+        c.assigned_admin_id,
+        c.assigned_faculty_id,
         cat.category_name,
-        admin.full_name as assigned_admin_name
+        admin.full_name as assigned_admin_name,
+        faculty.full_name as assigned_faculty_name
       FROM complaints c
       JOIN categories cat ON c.category_id = cat.category_id
       LEFT JOIN users admin ON c.assigned_admin_id = admin.user_id
+      LEFT JOIN users faculty ON c.assigned_faculty_id = faculty.user_id
       ${whereClause}
       ORDER BY ${orderCol} ${orderDir}
       LIMIT ${limit} OFFSET ${offset}
@@ -217,6 +295,7 @@ async function getComplaintById(req, res, next) {
         c.status,
         c.attachment_path,
         c.assigned_admin_id,
+        c.assigned_faculty_id,
         c.resolution_remarks,
         c.created_at,
         c.updated_at,
@@ -226,11 +305,14 @@ async function getComplaintById(req, res, next) {
         u.email as author_email,
         u.student_employee_id as author_id_code,
         admin.full_name as assigned_admin_name,
-        admin.email as assigned_admin_email
+        admin.email as assigned_admin_email,
+        faculty.full_name as assigned_faculty_name,
+        faculty.email as assigned_faculty_email
       FROM complaints c
       JOIN categories cat ON c.category_id = cat.category_id
       JOIN users u ON c.user_id = u.user_id
       LEFT JOIN users admin ON c.assigned_admin_id = admin.user_id
+      LEFT JOIN users faculty ON c.assigned_faculty_id = faculty.user_id
       WHERE c.complaint_id = ?
     `;
 
@@ -241,11 +323,18 @@ async function getComplaintById(req, res, next) {
 
     const complaint = complaints[0];
 
-    // Enforce ownership: Regular users can only access their own complaints
-    if (req.user.role !== 'ADMIN' && complaint.user_id !== req.user.userId) {
+    // Enforce ownership / access:
+    // Admin can view any complaint
+    // Assigned faculty can view complaints assigned to them
+    // Owner can view their own complaints
+    const isOwner = complaint.user_id === req.user.userId;
+    const isAdmin = req.user.role === 'ADMIN';
+    const isAssignedFaculty = req.user.role === 'FACULTY' && complaint.assigned_faculty_id === req.user.userId;
+
+    if (!isAdmin && !isOwner && !isAssignedFaculty) {
       return res.status(403).json({
         success: false,
-        message: 'Access denied: You can only view your own complaints'
+        message: 'Access denied: You do not have permission to view this complaint'
       });
     }
 
@@ -266,7 +355,7 @@ async function getComplaintById(req, res, next) {
     `;
     const history = await query(historySql, [complaintId]);
 
-    // Fetch comments (Regular users cannot view internal admin comments)
+    // Fetch comments (Regular users cannot view internal admin/faculty comments)
     let commentSql = `
       SELECT 
         cm.comment_id,
@@ -282,7 +371,7 @@ async function getComplaintById(req, res, next) {
     `;
     const commentParams = [complaintId];
 
-    if (req.user.role !== 'ADMIN') {
+    if (!isAdmin && !isAssignedFaculty) {
       commentSql += ' AND cm.is_internal = FALSE';
     }
 
@@ -359,16 +448,21 @@ async function getComplaintHistory(req, res, next) {
       return res.status(400).json({ success: false, message: 'Invalid complaint ID' });
     }
 
-    // Check ownership
+    // Check ownership / access
     const complaints = await query(
-      'SELECT user_id FROM complaints WHERE complaint_id = ?',
+      'SELECT user_id, assigned_faculty_id FROM complaints WHERE complaint_id = ?',
       [complaintId]
     );
     if (complaints.length === 0) {
       return res.status(404).json({ success: false, message: 'Complaint not found' });
     }
 
-    if (req.user.role !== 'ADMIN' && complaints[0].user_id !== req.user.userId) {
+    const complaint = complaints[0];
+    const isOwner = complaint.user_id === req.user.userId;
+    const isAdmin = req.user.role === 'ADMIN';
+    const isAssignedFaculty = req.user.role === 'FACULTY' && complaint.assigned_faculty_id === req.user.userId;
+
+    if (!isAdmin && !isOwner && !isAssignedFaculty) {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
@@ -408,7 +502,7 @@ async function addComment(req, res, next) {
     }
 
     const complaints = await query(
-      'SELECT user_id FROM complaints WHERE complaint_id = ?',
+      'SELECT user_id, assigned_faculty_id FROM complaints WHERE complaint_id = ?',
       [complaintId]
     );
 
@@ -416,13 +510,18 @@ async function addComment(req, res, next) {
       return res.status(404).json({ success: false, message: 'Complaint not found' });
     }
 
+    const complaint = complaints[0];
+    const isOwner = complaint.user_id === req.user.userId;
+    const isAdmin = req.user.role === 'ADMIN';
+    const isAssignedFaculty = req.user.role === 'FACULTY' && complaint.assigned_faculty_id === req.user.userId;
+
     // Enforce ownership / access
-    if (req.user.role !== 'ADMIN' && complaints[0].user_id !== req.user.userId) {
+    if (!isAdmin && !isOwner && !isAssignedFaculty) {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
-    // Only administrators can mark comments as internal notes
-    const internalFlag = req.user.role === 'ADMIN' && Boolean(is_internal);
+    // Only administrators and assigned faculty can mark comments as internal notes
+    const internalFlag = (isAdmin || isAssignedFaculty) && Boolean(is_internal);
 
     const insertSql = `
       INSERT INTO complaint_comments (complaint_id, author_id, message, is_internal, created_at)
@@ -457,6 +556,7 @@ async function addComment(req, res, next) {
 
 module.exports = {
   getCategories,
+  getFacultyList,
   createComplaint,
   getMyComplaints,
   getComplaintById,

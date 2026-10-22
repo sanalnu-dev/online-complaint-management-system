@@ -17,32 +17,56 @@ async function getDashboardStats(req, res, next) {
     );
     const statusCounts = {
       Submitted: 0,
+      Pending: 0,
+      Assigned: 0,
       'Under Review': 0,
       'In Progress': 0,
       Resolved: 0,
       Rejected: 0,
-      Reopened: 0
+      Reopened: 0,
+      Closed: 0
     };
     statusRows.forEach(row => {
-      statusCounts[row.status] = row.count;
+      if (statusCounts[row.status] !== undefined) {
+        statusCounts[row.status] = row.count;
+      }
     });
 
-    // 3. Resolution rate
+    // 3. Unassigned complaints (no admin AND no faculty assigned, still pending/submitted)
+    const [unassignedRow] = await query(
+      `SELECT COUNT(*) as unassigned 
+       FROM complaints 
+       WHERE assigned_admin_id IS NULL 
+         AND assigned_faculty_id IS NULL 
+         AND status IN ('Submitted', 'Pending')`
+    );
+    const unassignedCount = unassignedRow ? unassignedRow.unassigned : 0;
+
+    // 4. Overdue complaints (not resolved/rejected/closed, older than 7 days)
+    const [overdueRow] = await query(
+      `SELECT COUNT(*) as overdue 
+       FROM complaints 
+       WHERE status NOT IN ('Resolved', 'Rejected', 'Closed') 
+         AND created_at < DATE_SUB(NOW(), INTERVAL 7 DAY)`
+    );
+    const overdueCount = overdueRow ? overdueRow.overdue : 0;
+
+    // 5. Resolution rate
     const resolvedCount = statusCounts.Resolved || 0;
     const resolutionRate = totalComplaints > 0 
       ? Number(((resolvedCount / totalComplaints) * 100).toFixed(1)) 
       : 0;
 
-    // 4. Complaints by category
+    // 6. Complaints by category
     const categoryRows = await query(`
-      SELECT cat.category_name, COUNT(c.complaint_id) as count
+      SELECT cat.category_id, cat.category_name, cat.department, COUNT(c.complaint_id) as count
       FROM categories cat
       LEFT JOIN complaints c ON cat.category_id = c.category_id
-      GROUP BY cat.category_id, cat.category_name
+      GROUP BY cat.category_id, cat.category_name, cat.department
       ORDER BY count DESC
     `);
 
-    // 5. Complaints by priority
+    // 7. Complaints by priority
     const priorityRows = await query(`
       SELECT priority, COUNT(*) as count 
       FROM complaints 
@@ -56,10 +80,12 @@ async function getDashboardStats(req, res, next) {
       Low: 0
     };
     priorityRows.forEach(row => {
-      priorityCounts[row.priority] = row.count;
+      if (priorityCounts[row.priority] !== undefined) {
+        priorityCounts[row.priority] = row.count;
+      }
     });
 
-    // 6. Recent 5 complaints
+    // 8. Recent 5 complaints
     const recentComplaints = await query(`
       SELECT 
         c.complaint_id,
@@ -69,28 +95,57 @@ async function getDashboardStats(req, res, next) {
         c.status,
         c.created_at,
         cat.category_name,
-        u.full_name as user_name
+        u.full_name as user_name,
+        faculty.full_name as assigned_faculty_name,
+        admin.full_name as assigned_admin_name
       FROM complaints c
       JOIN categories cat ON c.category_id = cat.category_id
       JOIN users u ON c.user_id = u.user_id
+      LEFT JOIN users faculty ON c.assigned_faculty_id = faculty.user_id
+      LEFT JOIN users admin ON c.assigned_admin_id = admin.user_id
       ORDER BY c.created_at DESC
       LIMIT 5
     `);
 
-    // 7. Users count
-    const [userRow] = await query("SELECT COUNT(*) as total_users FROM users WHERE role = 'USER'");
+    // 9. Faculty workload distribution
+    const facultyWorkload = await query(`
+      SELECT 
+        u.user_id,
+        u.full_name,
+        u.email,
+        u.student_employee_id,
+        COUNT(c.complaint_id) as total_assigned,
+        SUM(CASE WHEN c.status IN ('Submitted', 'Pending', 'Assigned', 'Under Review', 'In Progress', 'Reopened') THEN 1 ELSE 0 END) as active_assigned,
+        SUM(CASE WHEN c.status = 'Resolved' THEN 1 ELSE 0 END) as resolved_count,
+        SUM(CASE WHEN c.status NOT IN ('Resolved', 'Rejected', 'Closed') AND c.created_at < DATE_SUB(NOW(), INTERVAL 7 DAY) THEN 1 ELSE 0 END) as overdue_count
+      FROM users u
+      LEFT JOIN complaints c ON u.user_id = c.assigned_faculty_id
+      WHERE u.role = 'FACULTY' AND u.is_active = 1
+      GROUP BY u.user_id, u.full_name, u.email, u.student_employee_id
+      ORDER BY active_assigned DESC
+    `);
+
+    // 10. Users count
+    const [userRow] = await query("SELECT COUNT(*) as total_users FROM users WHERE role IN ('USER', 'STUDENT')");
     const totalUsers = userRow ? userRow.total_users : 0;
+
+    const [facultyRow] = await query("SELECT COUNT(*) as total_faculty FROM users WHERE role = 'FACULTY'");
+    const totalFaculty = facultyRow ? facultyRow.total_faculty : 0;
 
     return res.status(200).json({
       success: true,
       stats: {
         totalComplaints,
         totalUsers,
+        totalFaculty,
+        unassignedCount,
+        overdueCount,
         resolutionRate,
         statusCounts,
         categoryBreakdown: categoryRows,
         priorityCounts,
-        recentComplaints
+        recentComplaints,
+        facultyWorkload
       }
     });
   } catch (error) {
@@ -104,7 +159,18 @@ async function getAllComplaints(req, res, next) {
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 10));
     const offset = (page - 1) * limit;
 
-    const { search, category_id, status, priority, assigned_admin_id, sortBy, sortOrder } = req.query;
+    const {
+      search,
+      category_id,
+      status,
+      priority,
+      assigned_admin_id,
+      assigned_faculty_id,
+      overdue,
+      unassigned,
+      sortBy,
+      sortOrder
+    } = req.query;
 
     let whereConditions = [];
     const params = [];
@@ -123,8 +189,12 @@ async function getAllComplaints(req, res, next) {
     }
 
     if (status) {
-      whereConditions.push('c.status = ?');
-      params.push(status);
+      if (status === 'Pending') {
+        whereConditions.push("c.status IN ('Submitted', 'Pending', 'Assigned')");
+      } else {
+        whereConditions.push('c.status = ?');
+        params.push(status);
+      }
     }
 
     if (priority) {
@@ -139,6 +209,25 @@ async function getAllComplaints(req, res, next) {
         whereConditions.push('c.assigned_admin_id = ?');
         params.push(parseInt(assigned_admin_id, 10));
       }
+    }
+
+    if (assigned_faculty_id) {
+      if (assigned_faculty_id === 'unassigned') {
+        whereConditions.push('c.assigned_faculty_id IS NULL');
+      } else {
+        whereConditions.push('c.assigned_faculty_id = ?');
+        params.push(parseInt(assigned_faculty_id, 10));
+      }
+    }
+
+    if (unassigned === 'true' || unassigned === '1') {
+      whereConditions.push('c.assigned_admin_id IS NULL AND c.assigned_faculty_id IS NULL');
+    }
+
+    if (overdue === 'true' || overdue === '1') {
+      whereConditions.push(
+        "c.status NOT IN ('Resolved', 'Rejected', 'Closed') AND c.created_at < DATE_SUB(NOW(), INTERVAL 7 DAY)"
+      );
     }
 
     const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
@@ -180,17 +269,21 @@ async function getAllComplaints(req, res, next) {
         c.updated_at,
         c.resolved_at,
         c.assigned_admin_id,
+        c.assigned_faculty_id,
         cat.category_id,
         cat.category_name,
         u.user_id,
         u.full_name as author_name,
         u.email as author_email,
         u.student_employee_id as author_id_code,
-        admin.full_name as assigned_admin_name
+        admin.full_name as assigned_admin_name,
+        faculty.full_name as assigned_faculty_name,
+        (c.status NOT IN ('Resolved', 'Rejected', 'Closed') AND c.created_at < DATE_SUB(NOW(), INTERVAL 7 DAY)) as is_overdue
       FROM complaints c
       JOIN categories cat ON c.category_id = cat.category_id
       JOIN users u ON c.user_id = u.user_id
       LEFT JOIN users admin ON c.assigned_admin_id = admin.user_id
+      LEFT JOIN users faculty ON c.assigned_faculty_id = faculty.user_id
       ${whereClause}
       ORDER BY ${orderCol} ${orderDir}
       LIMIT ${limit} OFFSET ${offset}
@@ -200,7 +293,10 @@ async function getAllComplaints(req, res, next) {
 
     return res.status(200).json({
       success: true,
-      complaints,
+      complaints: complaints.map(c => ({
+        ...c,
+        is_overdue: Boolean(c.is_overdue)
+      })),
       pagination: {
         total,
         page,
@@ -321,50 +417,291 @@ async function assignComplaint(req, res, next) {
       return res.status(400).json({ success: false, message: 'Invalid complaint ID' });
     }
 
-    const { admin_id } = req.body;
+    const { admin_id, faculty_id } = req.body;
 
-    let adminName = 'Unassigned';
-    let assignedAdminId = null;
+    const complaints = await query(
+      'SELECT complaint_id, status, assigned_admin_id, assigned_faculty_id FROM complaints WHERE complaint_id = ?',
+      [complaintId]
+    );
 
-    if (admin_id) {
-      assignedAdminId = parseInt(admin_id, 10);
-      const adminUsers = await query(
-        "SELECT user_id, full_name FROM users WHERE user_id = ? AND role = 'ADMIN' AND is_active = 1",
-        [assignedAdminId]
-      );
+    if (complaints.length === 0) {
+      return res.status(404).json({ success: false, message: 'Complaint not found' });
+    }
 
-      if (adminUsers.length === 0) {
-        return res.status(400).json({
-          success: false,
-          message: 'Selected administrator does not exist or is inactive'
-        });
+    const currentComplaint = complaints[0];
+
+    let assignedAdminId = currentComplaint.assigned_admin_id;
+    let adminName = null;
+    let assignedFacultyId = currentComplaint.assigned_faculty_id;
+    let facultyName = null;
+    const historyRemarks = [];
+
+    // Process admin assignment if provided in request body
+    if (admin_id !== undefined) {
+      if (admin_id === null || admin_id === '' || admin_id === 0 || admin_id === 'unassigned') {
+        assignedAdminId = null;
+        historyRemarks.push('Admin assignment removed');
+      } else {
+        const parsedAdminId = parseInt(admin_id, 10);
+        const adminUsers = await query(
+          "SELECT user_id, full_name FROM users WHERE user_id = ? AND role = 'ADMIN' AND is_active = 1",
+          [parsedAdminId]
+        );
+        if (adminUsers.length === 0) {
+          return res.status(400).json({
+            success: false,
+            message: 'Selected administrator does not exist or is inactive'
+          });
+        }
+        assignedAdminId = parsedAdminId;
+        adminName = adminUsers[0].full_name;
+        historyRemarks.push(`Assigned to administrator: ${adminName}`);
       }
-      adminName = adminUsers[0].full_name;
+    }
+
+    // Process faculty assignment if provided in request body
+    if (faculty_id !== undefined) {
+      if (faculty_id === null || faculty_id === '' || faculty_id === 0 || faculty_id === 'unassigned') {
+        assignedFacultyId = null;
+        historyRemarks.push('Faculty assignment removed');
+      } else {
+        const parsedFacultyId = parseInt(faculty_id, 10);
+        const facultyUsers = await query(
+          "SELECT user_id, full_name FROM users WHERE user_id = ? AND role = 'FACULTY' AND is_active = 1",
+          [parsedFacultyId]
+        );
+        if (facultyUsers.length === 0) {
+          return res.status(400).json({
+            success: false,
+            message: 'Selected faculty member does not exist or is inactive'
+          });
+        }
+        assignedFacultyId = parsedFacultyId;
+        facultyName = facultyUsers[0].full_name;
+        historyRemarks.push(`Assigned to faculty: ${facultyName}`);
+      }
+    }
+
+    // Determine target status
+    let targetStatus = currentComplaint.status;
+    if (
+      (currentComplaint.status === 'Submitted' || currentComplaint.status === 'Pending') &&
+      (assignedFacultyId || assignedAdminId)
+    ) {
+      targetStatus = 'Assigned';
     }
 
     await query(
-      'UPDATE complaints SET assigned_admin_id = ?, updated_at = NOW() WHERE complaint_id = ?',
-      [assignedAdminId, complaintId]
+      'UPDATE complaints SET assigned_admin_id = ?, assigned_faculty_id = ?, status = ?, updated_at = NOW() WHERE complaint_id = ?',
+      [assignedAdminId, assignedFacultyId, targetStatus, complaintId]
     );
 
-    // Log in history
-    await query(
-      `INSERT INTO complaint_status_history (complaint_id, changed_by, old_status, new_status, remarks, created_at)
-       VALUES (?, ?, ?, ?, ?, NOW())`,
+    if (historyRemarks.length > 0) {
+      await query(
+        `INSERT INTO complaint_status_history (complaint_id, changed_by, old_status, new_status, remarks, created_at)
+         VALUES (?, ?, ?, ?, ?, NOW())`,
+        [
+          complaintId,
+          req.user.userId,
+          currentComplaint.status,
+          targetStatus,
+          historyRemarks.join('; ')
+        ]
+      );
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: historyRemarks.join(', ') || 'Assignment updated successfully',
+      assignedAdminId,
+      assignedAdminName: adminName,
+      assignedFacultyId,
+      assignedFacultyName: facultyName,
+      status: targetStatus
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getCategoriesWithMeta(req, res, next) {
+  try {
+    const categories = await query(`
+      SELECT 
+        c.category_id,
+        c.category_name,
+        c.description,
+        c.department,
+        c.default_faculty_id,
+        u.full_name as default_faculty_name,
+        u.email as default_faculty_email,
+        COUNT(comp.complaint_id) as total_complaints,
+        SUM(CASE WHEN comp.status NOT IN ('Resolved', 'Rejected', 'Closed') THEN 1 ELSE 0 END) as active_complaints
+      FROM categories c
+      LEFT JOIN users u ON c.default_faculty_id = u.user_id
+      LEFT JOIN complaints comp ON c.category_id = comp.category_id
+      GROUP BY c.category_id, c.category_name, c.description, c.department, c.default_faculty_id, u.full_name, u.email
+      ORDER BY c.category_name ASC
+    `);
+
+    return res.status(200).json({
+      success: true,
+      categories
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function createCategory(req, res, next) {
+  try {
+    const { category_name, description, department, default_faculty_id } = req.body;
+
+    if (!category_name || typeof category_name !== 'string' || category_name.trim().length < 2) {
+      return res.status(400).json({
+        success: false,
+        message: 'Category name must be at least 2 characters long'
+      });
+    }
+
+    const existing = await query('SELECT category_id FROM categories WHERE category_name = ?', [
+      category_name.trim()
+    ]);
+    if (existing.length > 0) {
+      return res.status(409).json({
+        success: false,
+        message: 'A category with this name already exists'
+      });
+    }
+
+    let facultyId = null;
+    if (default_faculty_id) {
+      const parsed = parseInt(default_faculty_id, 10);
+      const check = await query("SELECT user_id FROM users WHERE user_id = ? AND role = 'FACULTY'", [
+        parsed
+      ]);
+      if (check.length === 0) {
+        return res.status(400).json({ success: false, message: 'Invalid default faculty selected' });
+      }
+      facultyId = parsed;
+    }
+
+    const result = await query(
+      `INSERT INTO categories (category_name, description, department, default_faculty_id)
+       VALUES (?, ?, ?, ?)`,
       [
-        complaintId,
-        req.user.userId,
-        null,
-        'Assigned',
-        `Assigned to administrator: ${adminName}`
+        category_name.trim(),
+        description ? description.trim() : null,
+        department ? department.trim() : null,
+        facultyId
+      ]
+    );
+
+    return res.status(201).json({
+      success: true,
+      message: 'Category created successfully',
+      category: {
+        categoryId: result.insertId,
+        categoryName: category_name.trim(),
+        description: description ? description.trim() : null,
+        department: department ? department.trim() : null,
+        defaultFacultyId: facultyId
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function updateCategory(req, res, next) {
+  try {
+    const categoryId = parseInt(req.params.id, 10);
+    if (isNaN(categoryId)) {
+      return res.status(400).json({ success: false, message: 'Invalid category ID' });
+    }
+
+    const { category_name, description, department, default_faculty_id } = req.body;
+
+    if (!category_name || typeof category_name !== 'string' || category_name.trim().length < 2) {
+      return res.status(400).json({
+        success: false,
+        message: 'Category name must be at least 2 characters long'
+      });
+    }
+
+    const existingCat = await query('SELECT category_id FROM categories WHERE category_id = ?', [
+      categoryId
+    ]);
+    if (existingCat.length === 0) {
+      return res.status(404).json({ success: false, message: 'Category not found' });
+    }
+
+    const nameCheck = await query(
+      'SELECT category_id FROM categories WHERE category_name = ? AND category_id != ?',
+      [category_name.trim(), categoryId]
+    );
+    if (nameCheck.length > 0) {
+      return res.status(409).json({ success: false, message: 'Category name is already taken' });
+    }
+
+    let facultyId = null;
+    if (default_faculty_id) {
+      const parsed = parseInt(default_faculty_id, 10);
+      const check = await query("SELECT user_id FROM users WHERE user_id = ? AND role = 'FACULTY'", [
+        parsed
+      ]);
+      if (check.length === 0) {
+        return res.status(400).json({ success: false, message: 'Invalid default faculty selected' });
+      }
+      facultyId = parsed;
+    }
+
+    await query(
+      `UPDATE categories 
+       SET category_name = ?, description = ?, department = ?, default_faculty_id = ?
+       WHERE category_id = ?`,
+      [
+        category_name.trim(),
+        description ? description.trim() : null,
+        department ? department.trim() : null,
+        facultyId,
+        categoryId
       ]
     );
 
     return res.status(200).json({
       success: true,
-      message: `Complaint assigned to ${adminName}`,
-      assignedAdminId,
-      assignedAdminName: adminName
+      message: 'Category updated successfully'
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function deleteCategory(req, res, next) {
+  try {
+    const categoryId = parseInt(req.params.id, 10);
+    if (isNaN(categoryId)) {
+      return res.status(400).json({ success: false, message: 'Invalid category ID' });
+    }
+
+    const [complaintCountRow] = await query(
+      'SELECT COUNT(*) as count FROM complaints WHERE category_id = ?',
+      [categoryId]
+    );
+
+    if (complaintCountRow && complaintCountRow.count > 0) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot delete category: it is currently used by ${complaintCountRow.count} complaint(s)`
+      });
+    }
+
+    await query('DELETE FROM categories WHERE category_id = ?', [categoryId]);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Category deleted successfully'
     });
   } catch (error) {
     next(error);
@@ -592,6 +929,20 @@ async function exportComplaintsCsv(req, res, next) {
   }
 }
 
+async function getFacultyList(req, res, next) {
+  try {
+    const faculty = await query(
+      "SELECT user_id, full_name, email, student_employee_id FROM users WHERE role = 'FACULTY' AND is_active = 1 ORDER BY full_name ASC"
+    );
+    return res.status(200).json({
+      success: true,
+      faculty
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   getDashboardStats,
   getAllComplaints,
@@ -600,6 +951,11 @@ module.exports = {
   assignComplaint,
   getUsers,
   getAdminList,
+  getFacultyList,
   toggleUserActive,
-  exportComplaintsCsv
+  exportComplaintsCsv,
+  getCategoriesWithMeta,
+  createCategory,
+  updateCategory,
+  deleteCategory
 };

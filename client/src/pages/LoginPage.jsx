@@ -50,6 +50,8 @@ export default function LoginPage() {
         success(`Welcome back, ${res.user.fullName}!`);
         if (res.user.role === 'ADMIN') {
           navigate('/admin/dashboard');
+        } else if (res.user.role === 'FACULTY') {
+          navigate('/faculty/dashboard');
         } else {
           navigate('/dashboard');
         }
